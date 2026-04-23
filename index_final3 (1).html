@@ -1,0 +1,162 @@
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image.prod.js"></script>
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { overflow: hidden; background: #000; font-family: sans-serif; }
+
+      #start-screen {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: #111; color: #fff;
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        z-index: 9999; gap: 24px; padding: 40px; text-align: center;
+      }
+      #start-screen h2 { font-size: 22px; font-weight: 700; }
+      #start-screen p { font-size: 14px; color: #aaa; line-height: 1.7; }
+      #start-btn {
+        background: #f90; color: #000; border: none;
+        padding: 18px 48px; border-radius: 40px;
+        font-size: 18px; font-weight: 800; cursor: pointer;
+      }
+      #msg {
+        position: fixed; bottom: 30px; left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0,0,0,0.7); color: #fff;
+        padding: 10px 24px; border-radius: 24px;
+        font-size: 13px; z-index: 9999;
+        display: none; text-align: center;
+        font-family: sans-serif;
+      }
+
+      /* Video fullscreen overlay — sin temblor porque es HTML puro */
+      #video-overlay {
+        position: fixed; inset: 0;
+        background: #000;
+        display: none;
+        align-items: center; justify-content: center;
+        z-index: 100;
+        opacity: 0;
+        transition: opacity .35s ease;
+      }
+      #video-overlay.visible { opacity: 1; }
+      #overlay-video { width: 100%; height: 100%; object-fit: cover; }
+
+      #close-btn {
+        position: fixed; top: 18px; right: 18px;
+        width: 44px; height: 44px; border-radius: 50%;
+        background: rgba(0,0,0,.55); border: 2px solid rgba(255,255,255,.4);
+        color: #fff; font-size: 20px;
+        display: none; align-items: center; justify-content: center;
+        cursor: pointer; z-index: 200;
+      }
+    </style>
+  </head>
+  <body>
+
+    <div id="start-screen">
+      <h2>AR Cuaderno</h2>
+      <p>Toca el boton y acepta<br>el permiso de camara</p>
+      <button id="start-btn" onclick="startAR()">ACTIVAR CAMARA</button>
+      <p id="error" style="color:#f55;font-size:13px;display:none"></p>
+    </div>
+
+    <div id="msg">Apunta a la imagen del cuaderno</div>
+
+    <!-- Video fullscreen sin temblor -->
+    <div id="video-overlay">
+      <video id="overlay-video" playsinline webkit-playsinline muted loop src="./video.mp4"></video>
+    </div>
+    <div id="close-btn" onclick="closeVideo()">&#x2715;</div>
+
+    <a-scene id="arscene"
+      style="display:none; opacity:0; pointer-events:none;"
+      mindar-image="imageTargetSrc: ./targets.mind; filterMinCF: 0.0001; filterBeta: 0.0001; missTolerance: 5;"
+      vr-mode-ui="enabled: false"
+      device-orientation-permission-ui="enabled: false">
+      <a-assets>
+        <video id="arVideo" src="./video.mp4"
+          preload="auto" loop muted playsinline webkit-playsinline
+          crossorigin="anonymous">
+        </video>
+      </a-assets>
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+      <a-entity mindar-image-target="targetIndex: 0">
+      </a-entity>
+    </a-scene>
+
+    <script>
+      async function startAR() {
+        const errorEl = document.getElementById('error');
+        const btn = document.getElementById('start-btn');
+        btn.textContent = 'Abriendo camara...';
+        btn.disabled = true;
+
+        try {
+          // Pedir camara explicitamente primero — esto hace que iOS muestre el popup de permiso
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' } },
+            audio: false
+          });
+          // Soltar el stream — A-Frame lo tomara despues
+          stream.getTracks().forEach(t => t.stop());
+
+          // Ahora mostrar A-Frame
+          document.getElementById('start-screen').style.display = 'none';
+          document.getElementById('msg').style.display = 'block';
+          const scene = document.getElementById('arscene');
+          scene.style.display = 'block';
+
+          scene.addEventListener('loaded', () => {
+            const target = document.querySelector('[mindar-image-target]');
+            let lostTimer = null;
+
+            target.addEventListener('targetFound', () => {
+              clearTimeout(lostTimer);
+              lostTimer = null;
+              // Mostrar video fullscreen sin temblor
+              const ov = document.getElementById('video-overlay');
+              const vid = document.getElementById('overlay-video');
+              ov.style.display = 'flex';
+              document.getElementById('close-btn').style.display = 'flex';
+              document.getElementById('msg').style.display = 'none';
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                ov.classList.add('visible');
+              }));
+              vid.play().catch(() => {});
+            });
+
+            target.addEventListener('targetLost', () => {
+              // Esperar 1.2s antes de cerrar para evitar parpadeos
+              lostTimer = setTimeout(() => closeVideo(), 1200);
+            });
+          });
+
+        } catch(err) {
+          btn.textContent = 'ACTIVAR CAMARA';
+          btn.disabled = false;
+          errorEl.style.display = 'block';
+          if (err.name === 'NotAllowedError') {
+            errorEl.textContent = 'Permiso de camara denegado. Ve a Configuracion > Safari > Camara > Permitir';
+          } else {
+            errorEl.textContent = 'Error: ' + err.message;
+          }
+        }
+      }
+      function closeVideo() {
+        const ov = document.getElementById('video-overlay');
+        ov.classList.remove('visible');
+        setTimeout(() => {
+          ov.style.display = 'none';
+          document.getElementById('overlay-video').pause();
+        }, 350);
+        document.getElementById('close-btn').style.display = 'none';
+        document.getElementById('msg').style.display = 'block';
+      }
+    </script>
+
+  </body>
+</html>
